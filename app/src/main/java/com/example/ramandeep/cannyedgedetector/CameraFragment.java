@@ -154,7 +154,6 @@ public class CameraFragment extends Fragment implements SurfaceHolder.Callback, 
         @Override
         public boolean onFling(MotionEvent e1, MotionEvent e2, float velocityX, float velocityY){
             float diff = Math.abs(e1.getX() - e2.getX());
-            float vert_diff = Math.abs(e1.getY() - e2.getY());
             if(!previewOn && diff >= SWIPE_RANGE) {
                 showPreview();
                 return true;

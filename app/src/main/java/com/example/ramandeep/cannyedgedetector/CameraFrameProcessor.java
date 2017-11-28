@@ -42,7 +42,9 @@ public class CameraFrameProcessor {
     private Type rgba_in_type;//the type that is used in for processing
     private Type rgba_out_type;//the type that the display takes
     private Type rgba_flat_type;//u8 flat
+    private Type gradient_magnitude_and_direction_type;
     private Type gradient_direction_type;
+    private Type flat_float_type;
 
     private Type.Builder camera_input_type_builder;
 
@@ -141,6 +143,8 @@ public class CameraFrameProcessor {
                 rgba_in_type = Type.createXY(renderScript,Element.U8_4(renderScript),width,height);
                 rgba_flat_type = Type.createXY(renderScript,Element.U8(renderScript),width,height);
                 gradient_direction_type = Type.createXY(renderScript,Element.F16(renderScript),width,height);
+                gradient_magnitude_and_direction_type = Type.createXY(renderScript,Element.F16_2(renderScript),width,height);
+                flat_float_type = Type.createXY(renderScript,Element.F16(renderScript),width,height);
                 frameProcessor.set_x_max(width);
                 frameProcessor.set_y_max(height);
             }
@@ -151,6 +155,8 @@ public class CameraFrameProcessor {
                 rgba_in_type = Type.createXY(renderScript,Element.U8_4(renderScript),height,width);
                 rgba_flat_type = Type.createXY(renderScript,Element.U8(renderScript),height,width);
                 gradient_direction_type = Type.createXY(renderScript,Element.F16(renderScript),height,width);
+                gradient_magnitude_and_direction_type = Type.createXY(renderScript,Element.F16_2(renderScript),height,width);
+                flat_float_type = Type.createXY(renderScript,Element.F16(renderScript),height,width);
                 frameProcessor.set_x_max(height);
                 frameProcessor.set_y_max(width);
             }
@@ -220,21 +226,21 @@ public class CameraFrameProcessor {
         ScriptGroup.Binding grad_x_input_binding = new ScriptGroup.Binding(convolve3x3_gradx.getFieldID_Input(),gray_flat_to_gray_smooth_future);
         ScriptGroup.Closure grad_x_closure = ce_builder2.addKernel(convolve3x3_gradx.getKernelID(),rgba_flat_type,grad_x_input_binding);
         ScriptGroup.Future grad_x_future = grad_x_closure.getReturn();
-        //grad_x + grad_y -> grad
+        //grad x + grad y = grad
         ScriptGroup.Closure gradient_closure = ce_builder2.addKernel(frameProcessor.getKernelID_gradient_flat(),rgba_flat_type,grad_x_future,grad_y_future);
         ScriptGroup.Future gradient_future = gradient_closure.getReturn();
-        //grad_x and grad_y -> gradient_direction
-        ScriptGroup.Closure gradient_direction_closure = ce_builder2.addKernel(frameProcessor.getKernelID_gradient_direction(),gradient_direction_type,grad_x_future,grad_y_future);
+        //grad x + grad y = grad_direction
+        ScriptGroup.Closure gradient_direction_closure = ce_builder2.addKernel(frameProcessor.getKernelID_gradient_direction(),flat_float_type,grad_x_future,grad_y_future);
         ScriptGroup.Future gradient_direction_future = gradient_direction_closure.getReturn();
-        //gradient->gradient_non_max_suppressed
-        ScriptGroup.Binding gradient_binding = new ScriptGroup.Binding(frameProcessor.getFieldID_gradient(),gradient_future);
-        ScriptGroup.Closure gradient_non_max_suppressed_closure = ce_builder2.addKernel(frameProcessor.getKernelID_non_max_suppression(),rgba_flat_type,gradient_future,gradient_direction_future,gradient_binding);
-        ScriptGroup.Future gradient_non_max_suppressed_future = gradient_non_max_suppressed_closure.getReturn();
-        //gradient->gradient_post_threshold
-        ScriptGroup.Closure gradient_to_grad_threshold_closure = ce_builder2.addKernel(frameProcessor.getKernelID_canny_threshold(),rgba_flat_type,gradient_non_max_suppressed_future);
-        ScriptGroup.Future gradient_to_grad_threshold_future = gradient_to_grad_threshold_closure.getReturn();
-        //gradient->rgba
-        ScriptGroup.Closure flat_to_rgba_closure = ce_builder2.addKernel(frameProcessor.getKernelID_flat_to_rgba(),rgba_in_type,gradient_to_grad_threshold_future);
+        //grad_magnitude + gradient_direction -> non_max_suppression
+        ScriptGroup.Binding gradient_magnitude_binding = new ScriptGroup.Binding(frameProcessor.getFieldID_gradient(),gradient_future);
+        ScriptGroup.Closure non_max_suppression_closure= ce_builder2.addKernel(frameProcessor.getKernelID_non_max_suppression(),rgba_flat_type,gradient_future,gradient_direction_future,gradient_magnitude_binding);
+        ScriptGroup.Future non_max_suppression_future = non_max_suppression_closure.getReturn();
+        //non_max_suppression->threshold
+        ScriptGroup.Closure threshold_closure = ce_builder2.addKernel(frameProcessor.getKernelID_canny_threshold(),rgba_flat_type,non_max_suppression_future);
+        ScriptGroup.Future threshold_future = threshold_closure.getReturn();
+        //flat_type->rgba
+        ScriptGroup.Closure flat_to_rgba_closure = ce_builder2.addKernel(frameProcessor.getKernelID_flat_to_rgba(),rgba_in_type,threshold_future);
         ScriptGroup.Future flat_to_rgba_future = flat_to_rgba_closure.getReturn();
         //rgba->rgba_flip_xy
         ScriptGroup.Closure rgba_to_flip_xy_closure = ce_builder2.addKernel(frameProcessor.getKernelID_copy_dimension_flipped(),rgba_out_type,flat_to_rgba_future,rgba_flip_xy_output_binding);
