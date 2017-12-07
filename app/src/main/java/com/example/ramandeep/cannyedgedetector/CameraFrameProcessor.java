@@ -12,6 +12,7 @@ import android.renderscript.ScriptIntrinsicYuvToRGB;
 import android.renderscript.Type;
 import android.view.Surface;
 
+import com.example.ramandeep.cannyedgedetector2.ScriptC_CannyEdgeUcharOps;
 import com.example.ramandeep.cannyedgedetector2.ScriptC_FrameProcessor;
 
 /**
@@ -34,6 +35,7 @@ public class CameraFrameProcessor {
     private ScriptIntrinsicConvolve3x3 convolve3x3_grady;
     private ScriptIntrinsicConvolve3x3 convolve3x3_gradx;
     private ScriptC_FrameProcessor frameProcessor;//custom script to process frames
+    private ScriptC_CannyEdgeUcharOps cannyEdgeUcharOps;
 
     private Allocation camera_input;//frames are produced by the camera into camera_input
     private Allocation camera_ce_input;//get a single frame from the camera to edge detect
@@ -42,8 +44,6 @@ public class CameraFrameProcessor {
     private Type rgba_in_type;//the type that is used in for processing
     private Type rgba_out_type;//the type that the display takes
     private Type rgba_flat_type;//u8 flat
-    private Type gradient_magnitude_and_direction_type;
-    private Type gradient_direction_type;
     private Type flat_float_type;
 
     private Type.Builder camera_input_type_builder;
@@ -52,22 +52,13 @@ public class CameraFrameProcessor {
     private ScriptGroup.Builder2 ce_builder2;
     private ScriptGroup normalScriptGroup;
     private ScriptGroup edgeDetectScriptGroup;
-    private final float[] prewitt_dy =  {
-            1f, 1f, 1f,
-            0f, 0f, 0f,
-           -1f,-1f,-1f
-    };
-    private final float[] prewitt_dx = {
-            1f,0f,-1f,
-            1f,0f,-1f,
-            1f,0f,-1f
-    };
 
     private BackgroundTask ioTask;
     private Runnable FrameAvailableRunnable = new Runnable() {
         @Override
         public void run() {
-            Object[] result = normalScriptGroup.execute(0);
+            camera_input.ioReceive();
+            normalScriptGroup.execute(0);
             rgba_out.ioSend();
         }
     };
@@ -75,7 +66,8 @@ public class CameraFrameProcessor {
     private Runnable EdgeDetectFrameRunnable = new Runnable() {
         @Override
         public void run() {
-            Object[] result = edgeDetectScriptGroup.execute(0);
+            camera_ce_input.ioReceive();
+            edgeDetectScriptGroup.execute(0);
             rgba_out.ioSend();
         }
     };
@@ -90,6 +82,7 @@ public class CameraFrameProcessor {
         convolve3x3_gradx = ScriptIntrinsicConvolve3x3.create(renderScript,Element.U8(renderScript));
 
         frameProcessor = new ScriptC_FrameProcessor(renderScript);
+        cannyEdgeUcharOps = new ScriptC_CannyEdgeUcharOps(renderScript);
 
         builder2 = new ScriptGroup.Builder2(renderScript);
         ce_builder2 = new ScriptGroup.Builder2(renderScript);
@@ -97,7 +90,17 @@ public class CameraFrameProcessor {
         camera_input_type_builder = new Type.Builder(renderScript, Element.U8(renderScript));//for yuv type
         camera_input_type_builder.setYuvFormat(ImageFormat.YUV_420_888);//we know camera outputs yuv_420_888
 
+        float[] prewitt_dy = {
+                1f, 1f, 1f,
+                0f, 0f, 0f,
+                -1f, -1f, -1f
+        };
         convolve3x3_grady.setCoefficients(prewitt_dy);
+        float[] prewitt_dx = {
+                1f, 0f, -1f,
+                1f, 0f, -1f,
+                1f, 0f, -1f
+        };
         convolve3x3_gradx.setCoefficients(prewitt_dx);
         intrinsicBlur.setRadius(10f);
     }
@@ -138,27 +141,11 @@ public class CameraFrameProcessor {
             //if not aligned then xy needs to be swapped
             if(!swapXY){
                 //do not flip xy with width and height
-                camera_input_type_builder.setX(width);
-                camera_input_type_builder.setY(height);
-                rgba_in_type = Type.createXY(renderScript,Element.U8_4(renderScript),width,height);
-                rgba_flat_type = Type.createXY(renderScript,Element.U8(renderScript),width,height);
-                gradient_direction_type = Type.createXY(renderScript,Element.F16(renderScript),width,height);
-                gradient_magnitude_and_direction_type = Type.createXY(renderScript,Element.F16_2(renderScript),width,height);
-                flat_float_type = Type.createXY(renderScript,Element.F16(renderScript),width,height);
-                frameProcessor.set_x_max(width);
-                frameProcessor.set_y_max(height);
+                initTypes(width,height);
             }
             else{
                 //flip xy with width and height
-                camera_input_type_builder.setX(height);
-                camera_input_type_builder.setY(width);
-                rgba_in_type = Type.createXY(renderScript,Element.U8_4(renderScript),height,width);
-                rgba_flat_type = Type.createXY(renderScript,Element.U8(renderScript),height,width);
-                gradient_direction_type = Type.createXY(renderScript,Element.F16(renderScript),height,width);
-                gradient_magnitude_and_direction_type = Type.createXY(renderScript,Element.F16_2(renderScript),height,width);
-                flat_float_type = Type.createXY(renderScript,Element.F16(renderScript),height,width);
-                frameProcessor.set_x_max(height);
-                frameProcessor.set_y_max(width);
+                initTypes(height,width);
             }
             //output type will always match the display width and height
             System.out.println("width,height = "+width+", "+height);
@@ -175,22 +162,35 @@ public class CameraFrameProcessor {
         camera_input.setOnBufferAvailableListener(new Allocation.OnBufferAvailableListener() {
             @Override
             public void onBufferAvailable(Allocation allocation) {
-                allocation.ioReceive();
+                //allocation.ioReceive();
                 ioTask.submitRunnable(FrameAvailableRunnable);
             }
         });
         camera_ce_input.setOnBufferAvailableListener(new Allocation.OnBufferAvailableListener() {
             @Override
             public void onBufferAvailable(Allocation allocation) {
-                allocation.ioReceive();
+                //allocation.ioReceive();
                 ioTask.submitRunnable(EdgeDetectFrameRunnable);
             }
         });
+
+        //initialize allocations
         initScripts();
     }
 
-    private void initScripts() {
+    private void initTypes(int width, int height) {
+        camera_input_type_builder.setX(width);
+        camera_input_type_builder.setY(height);
+        rgba_in_type = Type.createXY(renderScript,Element.U8_4(renderScript),width,height);
+        rgba_flat_type = Type.createXY(renderScript,Element.U8(renderScript),width,height);
+        flat_float_type = Type.createXY(renderScript,Element.F32(renderScript),width,height);
+        frameProcessor.set_x_max(width);
+        frameProcessor.set_y_max(height);
+        cannyEdgeUcharOps.set_x_max(width);
+        cannyEdgeUcharOps.set_y_max(height);
+    }
 
+    private void initScripts() {
         builder2.addInput();
         ScriptGroup.Binding yuv_input_binding = new ScriptGroup.Binding(intrinsicYuvToRGB.getFieldID_Input(),camera_input);
         ScriptGroup.Binding rgba_flip_xy_output_binding = new ScriptGroup.Binding(frameProcessor.getFieldID_rgba_out(),rgba_out);
@@ -227,17 +227,17 @@ public class CameraFrameProcessor {
         ScriptGroup.Closure grad_x_closure = ce_builder2.addKernel(convolve3x3_gradx.getKernelID(),rgba_flat_type,grad_x_input_binding);
         ScriptGroup.Future grad_x_future = grad_x_closure.getReturn();
         //grad x + grad y = grad
-        ScriptGroup.Closure gradient_closure = ce_builder2.addKernel(frameProcessor.getKernelID_gradient_flat(),rgba_flat_type,grad_x_future,grad_y_future);
-        ScriptGroup.Future gradient_future = gradient_closure.getReturn();
+        ScriptGroup.Closure gradient_magnitude_closure = ce_builder2.addKernel(cannyEdgeUcharOps.getKernelID_gradient_magnitude(),rgba_flat_type,grad_x_future,grad_y_future);
+        ScriptGroup.Future gradient_magnitude_future = gradient_magnitude_closure.getReturn();
         //grad x + grad y = grad_direction
-        ScriptGroup.Closure gradient_direction_closure = ce_builder2.addKernel(frameProcessor.getKernelID_gradient_direction(),flat_float_type,grad_x_future,grad_y_future);
+        ScriptGroup.Closure gradient_direction_closure = ce_builder2.addKernel(cannyEdgeUcharOps.getKernelID_gradient_direction(),flat_float_type,grad_x_future,grad_y_future);
         ScriptGroup.Future gradient_direction_future = gradient_direction_closure.getReturn();
         //grad_magnitude + gradient_direction -> non_max_suppression
-        ScriptGroup.Binding gradient_magnitude_binding = new ScriptGroup.Binding(frameProcessor.getFieldID_gradient(),gradient_future);
-        ScriptGroup.Closure non_max_suppression_closure= ce_builder2.addKernel(frameProcessor.getKernelID_non_max_suppression(),rgba_flat_type,gradient_future,gradient_direction_future,gradient_magnitude_binding);
+        ScriptGroup.Binding gradient_magnitude_binding = new ScriptGroup.Binding(cannyEdgeUcharOps.getFieldID_gradient(),gradient_magnitude_future);
+        ScriptGroup.Closure non_max_suppression_closure= ce_builder2.addKernel(cannyEdgeUcharOps.getKernelID_non_max_suppression(),rgba_flat_type,gradient_magnitude_future,gradient_direction_future,gradient_magnitude_binding);
         ScriptGroup.Future non_max_suppression_future = non_max_suppression_closure.getReturn();
         //non_max_suppression->threshold
-        ScriptGroup.Closure threshold_closure = ce_builder2.addKernel(frameProcessor.getKernelID_canny_threshold(),rgba_flat_type,non_max_suppression_future);
+        ScriptGroup.Closure threshold_closure = ce_builder2.addKernel(cannyEdgeUcharOps.getKernelID_canny_threshold(),rgba_flat_type,non_max_suppression_future);
         ScriptGroup.Future threshold_future = threshold_closure.getReturn();
         //flat_type->rgba
         ScriptGroup.Closure flat_to_rgba_closure = ce_builder2.addKernel(frameProcessor.getKernelID_flat_to_rgba(),rgba_in_type,threshold_future);
@@ -247,6 +247,7 @@ public class CameraFrameProcessor {
         ScriptGroup.Future rgba_to_flip_xy_future = rgba_to_flip_xy_closure.getReturn();
         edgeDetectScriptGroup = ce_builder2.create("edge_detect_sg",rgba_to_flip_xy_future);
     }
+
 
     /*
     * Return the input surface that the frame
@@ -310,7 +311,9 @@ public class CameraFrameProcessor {
         frameProcessor.destroy();
         intrinsicYuvToRGB.destroy();
         normalScriptGroup.destroy();
-        edgeDetectScriptGroup.destroy();
+        if(edgeDetectScriptGroup != null){
+            edgeDetectScriptGroup.destroy();
+        }
         renderScript.destroy();
     }
 }
