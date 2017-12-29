@@ -95,6 +95,7 @@ public class CameraFragment extends Fragment implements SurfaceHolder.Callback, 
     public void onPause() {
         super.onPause();
         cameraOperator.onPause();
+        cameraOperator.newCountDownLatch();
         cameraFrameProcessor.onPause();
     }
 
@@ -125,7 +126,6 @@ public class CameraFragment extends Fragment implements SurfaceHolder.Callback, 
 
     @Override
     public void surfaceDestroyed(SurfaceHolder surfaceHolder) {
-        cameraOperator.newCountDownLatch();
     }
 
     public void edgeDetect() {
@@ -180,6 +180,7 @@ public class CameraFragment extends Fragment implements SurfaceHolder.Callback, 
         }
         @Override
         public void run() {
+            System.out.println("Initializing Allocations");
             cameraFrameProcessor.setFrameDimensions(width,height);
             cameraFrameProcessor.InitAllocations();
             cameraFrameProcessor.setOutputSurface(surfaceHolder.getSurface());

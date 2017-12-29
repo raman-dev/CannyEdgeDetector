@@ -9,6 +9,9 @@ rs_allocation rgba_out;
 int x_max;
 int y_max;
 
+void init(){
+}
+
 uchar4 RS_KERNEL float_to_rgba(const float in){
     return rsPackColorTo8888(in,in,in,1.0f);
 }

@@ -89,6 +89,7 @@ public class CameraOperator {
 
         @Override
         public void onConfigureFailed(@NonNull CameraCaptureSession cameraCaptureSession) {
+
             cameraCaptureSession.close();
         }
 
@@ -144,11 +145,13 @@ public class CameraOperator {
         @Override
         public void run() {
             try {
+                System.out.println("Waiting to Create CaptureSession...");
                 displayWaitLatch.await();
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }
             try {
+                System.out.println("Creating CaptureSession...");
                 mCameraDevice.createCaptureSession(surfaceList,captureSessionCallback,cameraThreadHandler);
             } catch (CameraAccessException e) {
                 e.printStackTrace();
@@ -406,7 +409,6 @@ public class CameraOperator {
     }
 
     public void captureSingleImage() {
-
         try {
             mCameraCaptureSession.capture(singleImageRequestBuilder.build(),mCaptureCallback,cameraThreadHandler);
         } catch (CameraAccessException e) {

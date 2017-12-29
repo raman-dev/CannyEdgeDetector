@@ -11,6 +11,8 @@ rs_allocation gradient;
 int x_max;
 int y_max;
 
+void init(){}
+
 uchar RS_KERNEL canny_threshold(const uchar in){
     if(in > threshold){
         return 255;
