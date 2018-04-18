@@ -9,42 +9,42 @@ import android.os.HandlerThread;
  */
 
 public class BackgroundTask {
-    private HandlerThread thread;
-    private Handler threadHandler;
+    private Handler handler;
+    private HandlerThread handlerThread;
+    private String name;
 
-    private String taskName;
-
-
-    public BackgroundTask(String taskName){
-        this.taskName = taskName;
-        thread = new HandlerThread(taskName);
-        thread.start();
-        threadHandler = new Handler(thread.getLooper());
+    public BackgroundTask(String name){
+        this.name = name;
+        handlerThread = new HandlerThread(name);
+        handlerThread.start();
+        handler = new Handler(handlerThread.getLooper());
     }
 
-    public void submitRunnableWithDelay(Runnable runnable,long delay){
-        threadHandler.postDelayed(runnable,delay);
-    }
-
+    /*
+    * Post a runnable to the thread.
+    * */
     public void submitRunnable(Runnable runnable){
-        threadHandler.post(runnable);
+        handler.post(runnable);
     }
 
-    public void close(){
-        if(threadHandler != null){
-            threadHandler.removeCallbacks(null);
+    /*
+    * Remove callbacks to the thread handler and
+    * stop the thread.
+    * */
+    public void CloseTask(){
+        if(handler!=null){
+            handler.removeCallbacks(null);
+            handler = null;
         }
-        if(thread != null){
-            if(thread.quit()){
-                thread = null;
-                threadHandler = null;
-                System.out.println(taskName + " Ended.");
+        if(handlerThread!=null){
+            handlerThread.quitSafely();
+            try {
+                handlerThread.join();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
             }
+            handlerThread = null;
+            System.out.println(name+"Closed!");
         }
-    }
-
-    //remove all cancel all tasks
-    public void clear() {
-        threadHandler.removeCallbacks(null);
     }
 }

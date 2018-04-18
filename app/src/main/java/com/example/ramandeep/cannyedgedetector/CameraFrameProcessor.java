@@ -7,13 +7,13 @@ import android.renderscript.Element;
 import android.renderscript.RenderScript;
 import android.renderscript.ScriptGroup;
 import android.renderscript.ScriptIntrinsicBlur;
+import android.renderscript.ScriptIntrinsicColorMatrix;
 import android.renderscript.ScriptIntrinsicConvolve3x3;
 import android.renderscript.ScriptIntrinsicYuvToRGB;
 import android.renderscript.Type;
 import android.view.Surface;
 
-import com.example.ramandeep.cannyedgedetector2.ScriptC_CannyEdgeUcharOps;
-import com.example.ramandeep.cannyedgedetector2.ScriptC_FrameProcessor;
+import java.util.concurrent.Semaphore;
 
 /**
  * Created by Ramandeep on 2017-11-20.
@@ -22,298 +22,299 @@ import com.example.ramandeep.cannyedgedetector2.ScriptC_FrameProcessor;
 
 public class CameraFrameProcessor {
 
-    private int width = -1;//width of display surface
-    private int height = -1;//height of display surface
-    private int display_orientation = -1;
+    private RenderScript renderScriptCxt = null;
+
+    private ScriptIntrinsicYuvToRGB intrinsicYuvToRGB_preview;
+    private ScriptIntrinsicYuvToRGB intrinsicYuvToRGB_canny_edge;
+    private ScriptIntrinsicBlur intrinsicBlur;
+    private ScriptIntrinsicColorMatrix intrinsicColorMatrix;
+    private ScriptIntrinsicConvolve3x3 convolve3x3_dx;
+    private ScriptIntrinsicConvolve3x3 convolve3x3_dy;
+    private ScriptC_CameraFrameProc frameProc;
+
+    private ScriptGroup.Builder2 canny_edge_detection_builder;
+    private ScriptGroup.Builder2 camera_preview_builder;
+    private ScriptGroup canny_edge_detector;
+    private ScriptGroup camera_preview;
+
+    private Allocation camera_input = null;
+    private Allocation camera_canny_input = null;
+    private Allocation rgba_out = null;
+
+    private BackgroundTask ioTask = null;//use this for surface data io
+    private BackgroundTask initTask = null;//use this thread for initializing
+
+    private boolean dimensions_set = false;
+    private int x = -1;
+    private int y = -1;
     private int camera_orientation = -1;
+    private int display_orientation = -1;
 
-    private boolean swapXY = false;
+    private Type rgba_input_type;
+    private Type rgba_output_type;
+    private Type direction_type;
+    private Type camera_input_type;
+    private Type flat_type;
+    private Semaphore initLock;
 
-    private RenderScript renderScript;
-    private ScriptIntrinsicYuvToRGB intrinsicYuvToRGB;//used for conversion from camera yuv to rgb
-    private ScriptIntrinsicBlur intrinsicBlur;//used to smooth image
-    private ScriptIntrinsicConvolve3x3 convolve3x3_grady;
-    private ScriptIntrinsicConvolve3x3 convolve3x3_gradx;
-    private ScriptC_FrameProcessor frameProcessor;//custom script to process frames
-    private ScriptC_CannyEdgeUcharOps cannyEdgeUcharOps;
-
-    private Allocation camera_input;//frames are produced by the camera into camera_input
-    private Allocation camera_ce_input;//get a single frame from the camera to edge detect
-    private Allocation rgba_out;//this allocation is used to output to the display
-
-    private Type rgba_in_type;//the type that is used in for processing
-    private Type rgba_out_type;//the type that the display takes
-    private Type rgba_flat_type;//u8 flat
-    private Type flat_float_type;
-
-    private Type.Builder camera_input_type_builder;
-
-    private ScriptGroup.Builder2 builder2;
-    private ScriptGroup.Builder2 ce_builder2;
-    private ScriptGroup normalScriptGroup;
-    private ScriptGroup edgeDetectScriptGroup;
-
-    private BackgroundTask ioTask;
-    private Runnable FrameAvailableRunnable = new Runnable() {
+    private Runnable ProcessPreviewFrame = new Runnable() {
         @Override
         public void run() {
             camera_input.ioReceive();
-            normalScriptGroup.execute(0);
+            camera_preview.execute(0);
             rgba_out.ioSend();
         }
     };
 
-    private Runnable EdgeDetectFrameRunnable = new Runnable() {
+    private Runnable CannyEdgeDetectFrame = new Runnable() {
         @Override
         public void run() {
-            camera_ce_input.ioReceive();
-            edgeDetectScriptGroup.execute(0);
-            rgba_out.ioSend();
+            camera_canny_input.ioReceive();//get data from camera
+            canny_edge_detector.execute(0);
+            rgba_out.ioSend();//send data to display
+        }
+    };
+    private Runnable initRunnable = new Runnable() {
+        @Override
+        public void run() {
+            initRenderScript();
+            initLock.release();
         }
     };
 
-    public CameraFrameProcessor(Context context){
-        ioTask = new BackgroundTask("CameraFrameProcessorTask");
-        renderScript = RenderScript.create(context);
-
-        intrinsicYuvToRGB = ScriptIntrinsicYuvToRGB.create(renderScript,Element.U8_4(renderScript));
-        intrinsicBlur = ScriptIntrinsicBlur.create(renderScript,Element.U8(renderScript));
-        convolve3x3_grady = ScriptIntrinsicConvolve3x3.create(renderScript,Element.U8(renderScript));
-        convolve3x3_gradx = ScriptIntrinsicConvolve3x3.create(renderScript,Element.U8(renderScript));
-
-        frameProcessor = new ScriptC_FrameProcessor(renderScript);
-        cannyEdgeUcharOps = new ScriptC_CannyEdgeUcharOps(renderScript);
-
-        builder2 = new ScriptGroup.Builder2(renderScript);
-        ce_builder2 = new ScriptGroup.Builder2(renderScript);
-
-        camera_input_type_builder = new Type.Builder(renderScript, Element.U8(renderScript));//for yuv type
-        camera_input_type_builder.setYuvFormat(ImageFormat.YUV_420_888);//we know camera outputs yuv_420_888
-
-        float[] prewitt_dy = {
-                1f, 1f, 1f,
-                0f, 0f, 0f,
-                -1f, -1f, -1f
-        };
-        convolve3x3_grady.setCoefficients(prewitt_dy);
-        float[] prewitt_dx = {
-                1f, 0f, -1f,
-                1f, 0f, -1f,
-                1f, 0f, -1f
-        };
-        convolve3x3_gradx.setCoefficients(prewitt_dx);
-        intrinsicBlur.setRadius(10f);
+    public CameraFrameProcessor(){
     }
 
     /*
-    * Frame Dimensions are determined by the display surface size
-    * if they need to be flipped user must specify
+    * Set the x y dimensions of the allocations.
+    * These dimensions should be display dimensions
     * */
-    public void setFrameDimensions(int width,int height){
-        this.width = width;
-        this.height = height;
+    public void setDimensions(int x,int y){
+        this.x = x;
+        this.y = y;
     }
 
     /*
-    * Set the display display_orientation
+    * Set the orientation of the camera. The orientation
+    * will be one of 0,90,180,270;values represent the rotation from
+    * the devices natural orientation
     * */
-    public void setDisplayOrientation(int display_orientation){
-        this.display_orientation = display_orientation;
-    }
-
-    /*
-    * Set the camera display_orientation
-    * */
-    public void setCameraOrientation(int camera_orientation){
+    public void setCameraOrientation(int camera_orientation) {
         this.camera_orientation = camera_orientation;
     }
 
     /*
-    * Initialize allocations to process frames
+    * Represents the devices rotation from its natural orientation
     * */
-    public void InitAllocations(){
-        /*
-        * If the orientations are known then we can know
-        * whether or not to flip dimensions or not
-        * */
-        if(camera_orientation!=-1 && display_orientation != -1){
-            swapXY = checkSensorAndDisplayAlignment();
-            //if not aligned then xy needs to be swapped
-            if(!swapXY){
-                //do not flip xy with width and height
-                initTypes(width,height);
-            }
-            else{
-                //flip xy with width and height
-                initTypes(height,width);
-            }
-            //output type will always match the display width and height
-            System.out.println("width,height = "+width+", "+height);
-            rgba_out_type = Type.createXY(renderScript,Element.U8_4(renderScript),width,height);
-        }else{
-            throw new RuntimeException("Orientations not set!");
-        }
-        //after types are determined
-        camera_input = Allocation.createTyped(renderScript, camera_input_type_builder.create(),Allocation.USAGE_IO_INPUT | Allocation.USAGE_SCRIPT);
-        //camera_input.setName("camera_input");
-        camera_ce_input = Allocation.createTyped(renderScript,camera_input_type_builder.create(),Allocation.USAGE_IO_INPUT | Allocation.USAGE_SCRIPT);
-        rgba_out = Allocation.createTyped(renderScript,rgba_out_type,Allocation.USAGE_IO_OUTPUT | Allocation.USAGE_SCRIPT);
-        //when the frame is data is available receive and process it
-        camera_input.setOnBufferAvailableListener(new Allocation.OnBufferAvailableListener() {
-            @Override
-            public void onBufferAvailable(Allocation allocation) {
-                //allocation.ioReceive();
-                ioTask.submitRunnable(FrameAvailableRunnable);
-            }
-        });
-        camera_ce_input.setOnBufferAvailableListener(new Allocation.OnBufferAvailableListener() {
-            @Override
-            public void onBufferAvailable(Allocation allocation) {
-                //allocation.ioReceive();
-                ioTask.submitRunnable(EdgeDetectFrameRunnable);
-            }
-        });
-
-        //initialize allocations
-        initScripts();
+    public void setDisplayOrientation(int display_orientation) {
+        this.display_orientation = display_orientation;
     }
 
-    private void initTypes(int width, int height) {
-        camera_input_type_builder.setX(width);
-        camera_input_type_builder.setY(height);
-        rgba_in_type = Type.createXY(renderScript,Element.U8_4(renderScript),width,height);
-        rgba_flat_type = Type.createXY(renderScript,Element.U8(renderScript),width,height);
-        flat_float_type = Type.createXY(renderScript,Element.F32(renderScript),width,height);
-        frameProcessor.set_x_max(width);
-        frameProcessor.set_y_max(height);
-        cannyEdgeUcharOps.set_x_max(width);
-        cannyEdgeUcharOps.set_y_max(height);
-    }
-
-    private void initScripts() {
-        builder2.addInput();
-        ScriptGroup.Binding yuv_input_binding = new ScriptGroup.Binding(intrinsicYuvToRGB.getFieldID_Input(),camera_input);
-        ScriptGroup.Binding rgba_flip_xy_output_binding = new ScriptGroup.Binding(frameProcessor.getFieldID_rgba_out(),rgba_out);
-        //yuv->rgba
-        ScriptGroup.Closure yuv_to_rgba_closure = builder2.addKernel(intrinsicYuvToRGB.getKernelID(),rgba_in_type,yuv_input_binding);
-        ScriptGroup.Future yuv_to_rgba_future = yuv_to_rgba_closure.getReturn();
-        //rgba-> rgba_flip_xy
-        ScriptGroup.Closure rgba_to_flip_xy_closure = builder2.addKernel(frameProcessor.getKernelID_copy_dimension_flipped(),rgba_out_type,yuv_to_rgba_future,rgba_flip_xy_output_binding);
-        ScriptGroup.Future rgba_to_flip_xy_future = rgba_to_flip_xy_closure.getReturn();
-        normalScriptGroup = builder2.create("normal_script_group",rgba_to_flip_xy_future);
-        initCEScripts();
-    }
-
-    private void initCEScripts() {
-        ce_builder2.addInput();
-        ScriptGroup.Binding yuv_input_binding = new ScriptGroup.Binding(intrinsicYuvToRGB.getFieldID_Input(),camera_ce_input);
-        ScriptGroup.Binding rgba_flip_xy_output_binding = new ScriptGroup.Binding(frameProcessor.getFieldID_rgba_out(),rgba_out);
-        //yuv->rgba
-        ScriptGroup.Closure yuv_to_rgba_closure = ce_builder2.addKernel(intrinsicYuvToRGB.getKernelID(),rgba_in_type,yuv_input_binding);
-        ScriptGroup.Future yuv_to_rgba_future = yuv_to_rgba_closure.getReturn();
-        //rgba->gray_flat
-        ScriptGroup.Closure rgba_to_gray_flat_closure = ce_builder2.addKernel(frameProcessor.getKernelID_rgbaToGrayScale_flat(),rgba_flat_type,yuv_to_rgba_future);
-        ScriptGroup.Future rgba_to_gray_flat_future = rgba_to_gray_flat_closure.getReturn();
-        //gray_flat->gray_smooth_flat
-        ScriptGroup.Binding gray_flat_to_gray_smooth_input_binding = new ScriptGroup.Binding(intrinsicBlur.getFieldID_Input(),rgba_to_gray_flat_future);
-        ScriptGroup.Closure gray_flat_to_gray_smooth_closure = ce_builder2.addKernel(intrinsicBlur.getKernelID(),rgba_flat_type,gray_flat_to_gray_smooth_input_binding);
-        ScriptGroup.Future gray_flat_to_gray_smooth_future = gray_flat_to_gray_smooth_closure.getReturn();
-        //gray_smooth->grad_y
-        ScriptGroup.Binding grad_y_input_binding = new ScriptGroup.Binding(convolve3x3_grady.getFieldID_Input(),gray_flat_to_gray_smooth_future);
-        ScriptGroup.Closure grad_y_closure = ce_builder2.addKernel(convolve3x3_grady.getKernelID(),rgba_flat_type,grad_y_input_binding);
-        ScriptGroup.Future grad_y_future = grad_y_closure.getReturn();
-        //gray_smooth->grad_x
-        ScriptGroup.Binding grad_x_input_binding = new ScriptGroup.Binding(convolve3x3_gradx.getFieldID_Input(),gray_flat_to_gray_smooth_future);
-        ScriptGroup.Closure grad_x_closure = ce_builder2.addKernel(convolve3x3_gradx.getKernelID(),rgba_flat_type,grad_x_input_binding);
-        ScriptGroup.Future grad_x_future = grad_x_closure.getReturn();
-        //grad x + grad y = grad
-        ScriptGroup.Closure gradient_magnitude_closure = ce_builder2.addKernel(cannyEdgeUcharOps.getKernelID_gradient_magnitude(),rgba_flat_type,grad_x_future,grad_y_future);
-        ScriptGroup.Future gradient_magnitude_future = gradient_magnitude_closure.getReturn();
-        //grad x + grad y = grad_direction
-        ScriptGroup.Closure gradient_direction_closure = ce_builder2.addKernel(cannyEdgeUcharOps.getKernelID_gradient_direction(),flat_float_type,grad_x_future,grad_y_future);
-        ScriptGroup.Future gradient_direction_future = gradient_direction_closure.getReturn();
-        //grad_magnitude + gradient_direction -> non_max_suppression
-        ScriptGroup.Binding gradient_magnitude_binding = new ScriptGroup.Binding(cannyEdgeUcharOps.getFieldID_gradient(),gradient_magnitude_future);
-        ScriptGroup.Closure non_max_suppression_closure= ce_builder2.addKernel(cannyEdgeUcharOps.getKernelID_non_max_suppression(),rgba_flat_type,gradient_magnitude_future,gradient_direction_future,gradient_magnitude_binding);
-        ScriptGroup.Future non_max_suppression_future = non_max_suppression_closure.getReturn();
-        //non_max_suppression->threshold
-        ScriptGroup.Closure threshold_closure = ce_builder2.addKernel(cannyEdgeUcharOps.getKernelID_canny_threshold(),rgba_flat_type,non_max_suppression_future);
-        ScriptGroup.Future threshold_future = threshold_closure.getReturn();
-        //flat_type->rgba
-        ScriptGroup.Closure flat_to_rgba_closure = ce_builder2.addKernel(frameProcessor.getKernelID_flat_to_rgba(),rgba_in_type,threshold_future);
-        ScriptGroup.Future flat_to_rgba_future = flat_to_rgba_closure.getReturn();
-        //rgba->rgba_flip_xy
-        ScriptGroup.Closure rgba_to_flip_xy_closure = ce_builder2.addKernel(frameProcessor.getKernelID_copy_dimension_flipped(),rgba_out_type,flat_to_rgba_future,rgba_flip_xy_output_binding);
-        ScriptGroup.Future rgba_to_flip_xy_future = rgba_to_flip_xy_closure.getReturn();
-        edgeDetectScriptGroup = ce_builder2.create("edge_detect_sg",rgba_to_flip_xy_future);
-    }
-
-
-    /*
-    * Return the input surface that the frame
-    * processor will use as its input
-    * */
-    public Surface getInputSurface(){
-        return camera_input.getSurface();
-    }
-
-    public Surface getEdgeDetectInputSurface(){
-        return camera_ce_input.getSurface();
-    }
-    /*
-    * Set the output surface to send data to
-    * */
-    public void setOutputSurface(Surface surface) {
+    public void setDisplaySurface(Surface surface){
         rgba_out.setSurface(surface);
     }
 
-    private boolean checkSensorAndDisplayAlignment() {
-        if(camera_orientation != display_orientation){
-            //find out which way to flip if we have to
-            //align output image to sensor
-            switch(display_orientation){
-                case Surface.ROTATION_0:
-                case Surface.ROTATION_180:
-                    //if the display is perpendicular to the camera
-                    //then xy must be swapped
-                    if(camera_orientation == 90 || camera_orientation == 270) {
-                        return true;
-                    }
-                    break;
-                case Surface.ROTATION_90:
-                case Surface.ROTATION_270:
-                    if(camera_orientation == 0 || camera_orientation == 180) {
-                        return true;
-                    }
-                    break;
-            }
-        }
-        return false;
+    /*
+    * A surface from an allocation for which the camera
+    * can use to output image data.
+    * */
+    public Surface getCameraOutputSurface(){
+        return camera_input.getSurface();
     }
 
-    public void onPause() {
-        //stop processing frames
-        ioTask.clear();
+    /**
+     * Return the surface for the camera to output data
+     * @return The surface for canny input data
+     */
+    public Surface getCameraCannyOutputSurface() {
+        return camera_canny_input.getSurface();
+    }
+
+    /**
+     * Initialize all allocations and scripts
+     * @param context
+     */
+    public void init(Context context) {
+        renderScriptCxt = RenderScript.create(context);
+        ioTask = new BackgroundTask("IOTask");
+        initTask = new BackgroundTask("RenderScriptInitTask");
+        initLock = new Semaphore(1);
+        try {
+            initLock.acquire();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        initTask.submitRunnable(initRunnable);
+        System.out.println("Name =>"+Thread.currentThread().getName());
+        try {
+            initLock.acquire();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void initRenderScript(){
+        intrinsicYuvToRGB_preview = ScriptIntrinsicYuvToRGB.create(renderScriptCxt,Element.U8_4(renderScriptCxt));
+        intrinsicYuvToRGB_canny_edge = ScriptIntrinsicYuvToRGB.create(renderScriptCxt,Element.U8_4(renderScriptCxt));
+        intrinsicBlur = ScriptIntrinsicBlur.create(renderScriptCxt,Element.U8(renderScriptCxt));
+        intrinsicColorMatrix = ScriptIntrinsicColorMatrix.create(renderScriptCxt);
+
+        convolve3x3_dx = ScriptIntrinsicConvolve3x3.create(renderScriptCxt,Element.U8(renderScriptCxt));
+        convolve3x3_dy = ScriptIntrinsicConvolve3x3.create(renderScriptCxt,Element.U8(renderScriptCxt));
+
+        frameProc = new ScriptC_CameraFrameProc(renderScriptCxt);
+        canny_edge_detection_builder = new ScriptGroup.Builder2(renderScriptCxt);
+        camera_preview_builder = new ScriptGroup.Builder2(renderScriptCxt);
+        initAllocations();
+    }
+
+    /**
+     * Initialize rgba_in,rgba_out and camera_in allocations
+     * used in edge detection and camera preview rotation, if necessary
+     */
+    private void initAllocations(){
+        //need an allocation for camera input
+        //intermediate for yuv to rgba
+        //and display one for flipping
+        initTypes();
+
+        camera_input = Allocation.createTyped(renderScriptCxt,camera_input_type,Allocation.USAGE_IO_INPUT | Allocation.USAGE_SCRIPT);
+        camera_canny_input = Allocation.createTyped(renderScriptCxt,camera_input_type,Allocation.USAGE_IO_INPUT | Allocation.USAGE_SCRIPT);
+
+        rgba_out = Allocation.createTyped(renderScriptCxt, rgba_output_type,Allocation.USAGE_IO_OUTPUT | Allocation.USAGE_SCRIPT);
+
+        camera_input.setOnBufferAvailableListener(new Allocation.OnBufferAvailableListener() {
+            @Override
+            public void onBufferAvailable(Allocation allocation) {
+                ioTask.submitRunnable(ProcessPreviewFrame);
+            }
+        });
+
+        camera_canny_input.setOnBufferAvailableListener(new Allocation.OnBufferAvailableListener() {
+            @Override
+            public void onBufferAvailable(Allocation allocation) {
+                ioTask.submitRunnable(CannyEdgeDetectFrame);
+            }
+        });
+
+        initScripts();
+    }
+
+    /**
+     * Initialize all the types used in allocation creation
+     * using the dimensions from call to setDimensions(x,y)
+     */
+    private void initTypes() {
+
+        Type.Builder camera_input_type_builder = new Type.Builder(renderScriptCxt, Element.U8(renderScriptCxt));//yuv is u8 for each element
+        camera_input_type_builder.setYuvFormat(ImageFormat.YUV_420_888);
+        camera_input_type_builder.setX(y);
+        camera_input_type_builder.setY(x);
+
+        camera_input_type = camera_input_type_builder.create();
+        rgba_input_type = Type.createXY(renderScriptCxt,Element.U8_4(renderScriptCxt),y,x);
+        flat_type = Type.createXY(renderScriptCxt,Element.U8(renderScriptCxt),y,x);
+        direction_type = Type.createXY(renderScriptCxt, Element.F32(renderScriptCxt),y,x);
+        rgba_output_type = Type.createXY(renderScriptCxt,Element.U8_4(renderScriptCxt),x,y);
+    }
+
+    private void initScripts(){
+        intrinsicYuvToRGB_preview.setInput(camera_input);
+        intrinsicYuvToRGB_canny_edge.setInput(camera_canny_input);
+        intrinsicColorMatrix.setGreyscale();
+        intrinsicBlur.setRadius(5f);
+        //
+        float[] filter_dx = {1f,0f,-1f,
+                1f,0f,-1f,
+                1f,0f,-1f};
+        float[] filter_dy = {1f, 1f, 1f,
+                0f, 0f, 0f,
+                -1f,-1f,-1f};
+        convolve3x3_dx.setCoefficients(filter_dx);
+        convolve3x3_dy.setCoefficients(filter_dy);
+        //yuv->rgba
+        frameProc.set_display_x_max(x);
+        frameProc.set_display_y_max(y);
+        //display is rotated
+        frameProc.set_camera_y_max(x);
+        frameProc.set_camera_x_max(y);
+        frameProc.set_rgba_out(rgba_out);
+        //rgba->rotated_rgba
+        //rotated_rgba->send out to display
+        camera_preview_builder.addInput();
+        //yuv->rgba
+        ScriptGroup.Closure yuv_to_rgba = camera_preview_builder.addKernel(intrinsicYuvToRGB_preview.getKernelID(), rgba_input_type);
+        ScriptGroup.Future rgba = yuv_to_rgba.getReturn();
+        //flip_rgba
+        ScriptGroup.Closure rgba_to_flip_rgba = camera_preview_builder.addKernel(frameProc.getKernelID_rotate_90_ccw(), rgba_output_type,rgba);
+        ScriptGroup.Future flip_future = rgba_to_flip_rgba.getReturn();
+        camera_preview = camera_preview_builder.create("CameraPreviewProcess",flip_future);
+        initCannyScripts();
+    }
+
+    /**
+     * Create the canny edge detection kernels
+     */
+    private void initCannyScripts() {
+        canny_edge_detection_builder.addInput();
+        //yuv->rgba
+        ScriptGroup.Closure yuv_to_rgba = canny_edge_detection_builder.addKernel(intrinsicYuvToRGB_canny_edge.getKernelID(),rgba_input_type);
+        ScriptGroup.Future rgba = yuv_to_rgba.getReturn();
+        //rgba->gray_scale
+        ScriptGroup.Closure gray_closure = canny_edge_detection_builder.addKernel(intrinsicColorMatrix.getKernelID(),rgba_input_type,rgba);
+        ScriptGroup.Future gray = gray_closure.getReturn();
+        //gray->gray_flat
+        ScriptGroup.Closure gray_flat_closure = canny_edge_detection_builder.addKernel(frameProc.getKernelID_rgba_to_flat(),flat_type,gray);
+        ScriptGroup.Future gray_flat = gray_flat_closure.getReturn();
+        //gray_flat->blur_flat
+        ScriptGroup.Binding blur_input_binding = new ScriptGroup.Binding(intrinsicBlur.getFieldID_Input(),gray_flat);
+        ScriptGroup.Closure blur_flat_closure = canny_edge_detection_builder.addKernel(intrinsicBlur.getKernelID(),flat_type,blur_input_binding);
+        ScriptGroup.Future blur_flat = blur_flat_closure.getReturn();
+        //blur_flat->grad_x
+        ScriptGroup.Binding grad_x_input_binding = new ScriptGroup.Binding(convolve3x3_dx.getFieldID_Input(),blur_flat);
+        ScriptGroup.Closure grad_x_closure = canny_edge_detection_builder.addKernel(convolve3x3_dx.getKernelID(),flat_type,grad_x_input_binding);
+        ScriptGroup.Future grad_x = grad_x_closure.getReturn();
+        //blur_flat->grad_y
+        ScriptGroup.Binding grad_y_input_binding = new ScriptGroup.Binding(convolve3x3_dy.getFieldID_Input(),blur_flat);
+        ScriptGroup.Closure grad_y_closure = canny_edge_detection_builder.addKernel(convolve3x3_dy.getKernelID(),flat_type,grad_y_input_binding);
+        ScriptGroup.Future grad_y = grad_y_closure.getReturn();
+        //grad_x + grad_y->grad_mag
+        ScriptGroup.Closure grad_mag_closure = canny_edge_detection_builder.addKernel(frameProc.getKernelID_gradient_magnitude(),flat_type,grad_x,grad_y);
+        ScriptGroup.Future grad_mag = grad_mag_closure.getReturn();
+        //grad_x + grad_y->grad_direction
+        ScriptGroup.Closure grad_direction_closure = canny_edge_detection_builder.addKernel(frameProc.getKernelID_gradient_direction(),direction_type,grad_x,grad_y);
+        ScriptGroup.Future grad_direction = grad_direction_closure.getReturn();
+        //grad_mag+grad_direction->non_max_suppressed
+        ScriptGroup.Binding gradient_global_binding = new ScriptGroup.Binding(frameProc.getFieldID_gradient(),grad_mag);
+        ScriptGroup.Closure non_max_suppressed_closure = canny_edge_detection_builder.addKernel(frameProc.getKernelID_non_max_suppression(),flat_type,grad_mag,grad_direction,gradient_global_binding);
+        ScriptGroup.Future non_max_suppressed = non_max_suppressed_closure.getReturn();
+        //non_max_suppressed->threshold
+        ScriptGroup.Closure threshold_closure = canny_edge_detection_builder.addKernel(frameProc.getKernelID_canny_threshold(),flat_type,non_max_suppressed);
+        ScriptGroup.Future threshold = threshold_closure.getReturn();
+        //unflatten
+        ScriptGroup.Closure flat_to_rgba_closure = canny_edge_detection_builder.addKernel(frameProc.getKernelID_flat_to_rgba(),rgba_input_type,threshold);
+        ScriptGroup.Future flat_to_rgba = flat_to_rgba_closure.getReturn();
+        //flip_rgba
+        ScriptGroup.Closure rgba_to_flip_rgba = canny_edge_detection_builder.addKernel(frameProc.getKernelID_rotate_90_ccw(), rgba_output_type,flat_to_rgba);
+        ScriptGroup.Future flip_future = rgba_to_flip_rgba.getReturn();
+        canny_edge_detector = canny_edge_detection_builder.create("CannyEdgeDetector",flip_future);
+    }
+
+    public void CloseBackgroundThreads() {
+        ioTask.CloseTask();
     }
 
     /*
-    * Should be called from fragment to cleanup stuff
+    * Destroy all render script objects and
+    *
     * */
-    public void onDestroy(){
-        //stop processing and end thread
-        ioTask.close();
-        //destroy allocations
-        camera_input.destroy();
-        camera_ce_input.destroy();
-        //rgba_in.destroy();
+    public void DestroyRenderScript(){
+        //destroy renderscript
         rgba_out.destroy();
-        //destroy scripts
-        frameProcessor.destroy();
-        intrinsicYuvToRGB.destroy();
-        normalScriptGroup.destroy();
-        if(edgeDetectScriptGroup != null){
-            edgeDetectScriptGroup.destroy();
-        }
-        renderScript.destroy();
+
+        RenderScript.releaseAllContexts();
     }
+
+
 }
+
