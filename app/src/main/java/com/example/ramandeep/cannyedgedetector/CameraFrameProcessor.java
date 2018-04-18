@@ -44,7 +44,6 @@ public class CameraFrameProcessor {
     private BackgroundTask ioTask = null;//use this for surface data io
     private BackgroundTask initTask = null;//use this thread for initializing
 
-    private boolean dimensions_set = false;
     private int x = -1;
     private int y = -1;
     private int camera_orientation = -1;
@@ -56,6 +55,7 @@ public class CameraFrameProcessor {
     private Type camera_input_type;
     private Type flat_type;
     private Semaphore initLock;
+    private boolean swapDimensions = false;
 
     private Runnable ProcessPreviewFrame = new Runnable() {
         @Override
@@ -205,17 +205,40 @@ public class CameraFrameProcessor {
      * using the dimensions from call to setDimensions(x,y)
      */
     private void initTypes() {
+        System.out.println("camera_orientation = "+camera_orientation);
+        System.out.println("display_orientation = "+display_orientation);
+        swapDimensions = false;
+        if(camera_orientation != display_orientation){
+            if(Math.abs(camera_orientation - display_orientation) != 180){
+                swapDimensions = true;
+            }
+        }
+        if(swapDimensions){
+            //swap the dimensions so it rotates upright
+            initTypes(y,x);
+        }
+        else{
+            initTypes(x,y);
+        }
 
+    }
+
+    private void initTypes(int width, int height) {
         Type.Builder camera_input_type_builder = new Type.Builder(renderScriptCxt, Element.U8(renderScriptCxt));//yuv is u8 for each element
         camera_input_type_builder.setYuvFormat(ImageFormat.YUV_420_888);
-        camera_input_type_builder.setX(y);
-        camera_input_type_builder.setY(x);
+        camera_input_type_builder.setX(width);
+        camera_input_type_builder.setY(height);
 
         camera_input_type = camera_input_type_builder.create();
-        rgba_input_type = Type.createXY(renderScriptCxt,Element.U8_4(renderScriptCxt),y,x);
-        flat_type = Type.createXY(renderScriptCxt,Element.U8(renderScriptCxt),y,x);
-        direction_type = Type.createXY(renderScriptCxt, Element.F32(renderScriptCxt),y,x);
-        rgba_output_type = Type.createXY(renderScriptCxt,Element.U8_4(renderScriptCxt),x,y);
+        rgba_input_type = Type.createXY(renderScriptCxt,Element.U8_4(renderScriptCxt),width,height);
+        flat_type = Type.createXY(renderScriptCxt,Element.U8(renderScriptCxt),width,height);
+        direction_type = Type.createXY(renderScriptCxt, Element.F32(renderScriptCxt),width,height);
+        if(swapDimensions){
+            rgba_output_type = Type.createXY(renderScriptCxt,Element.U8_4(renderScriptCxt),height,width);
+        }else{
+            rgba_output_type = Type.createXY(renderScriptCxt,Element.U8_4(renderScriptCxt),width,height);
+        }
+
     }
 
     private void initScripts(){
@@ -236,8 +259,13 @@ public class CameraFrameProcessor {
         frameProc.set_display_x_max(x);
         frameProc.set_display_y_max(y);
         //display is rotated
-        frameProc.set_camera_y_max(x);
-        frameProc.set_camera_x_max(y);
+        if(swapDimensions) {
+            frameProc.set_camera_y_max(x);
+            frameProc.set_camera_x_max(y);
+        }else{
+            frameProc.set_camera_y_max(y);
+            frameProc.set_camera_x_max(x);
+        }
         frameProc.set_rgba_out(rgba_out);
         //rgba->rotated_rgba
         //rotated_rgba->send out to display
@@ -295,9 +323,13 @@ public class CameraFrameProcessor {
         ScriptGroup.Closure flat_to_rgba_closure = canny_edge_detection_builder.addKernel(frameProc.getKernelID_flat_to_rgba(),rgba_input_type,threshold);
         ScriptGroup.Future flat_to_rgba = flat_to_rgba_closure.getReturn();
         //flip_rgba
-        ScriptGroup.Closure rgba_to_flip_rgba = canny_edge_detection_builder.addKernel(frameProc.getKernelID_rotate_90_ccw(), rgba_output_type,flat_to_rgba);
-        ScriptGroup.Future flip_future = rgba_to_flip_rgba.getReturn();
-        canny_edge_detector = canny_edge_detection_builder.create("CannyEdgeDetector",flip_future);
+        if(swapDimensions) {
+            ScriptGroup.Closure rgba_to_flip_rgba = canny_edge_detection_builder.addKernel(frameProc.getKernelID_rotate_90_ccw(), rgba_output_type, flat_to_rgba);
+            ScriptGroup.Future flip_future = rgba_to_flip_rgba.getReturn();
+            canny_edge_detector = canny_edge_detection_builder.create("CannyEdgeDetector", flip_future);
+        }else {
+            canny_edge_detector = canny_edge_detection_builder.create("CannyEdgeDetector", flat_to_rgba);
+        }
     }
 
     public void CloseBackgroundThreads() {

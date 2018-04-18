@@ -4,7 +4,7 @@ android {
     compileSdkVersion 26
     defaultConfig {
         applicationId "com.example.ramandeep.cannyedgedetector"
-        minSdkVersion 23
+        minSdkVersion 21
         targetSdkVersion 26
         renderscriptTargetApi 23
         versionCode 1

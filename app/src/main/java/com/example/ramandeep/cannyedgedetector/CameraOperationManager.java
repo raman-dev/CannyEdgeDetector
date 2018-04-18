@@ -9,6 +9,8 @@ import android.app.Activity;
 import android.app.Fragment;
 import android.content.Context;
 import android.content.pm.PackageManager;
+import android.graphics.ImageFormat;
+import android.graphics.PixelFormat;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
@@ -18,20 +20,24 @@ import android.hardware.camera2.CameraMetadata;
 import android.hardware.camera2.CaptureFailure;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.TotalCaptureResult;
+import android.hardware.camera2.params.StreamConfigurationMap;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.support.annotation.NonNull;
 import android.support.v4.app.ActivityCompat;
 import android.util.Log;
+import android.util.Size;
 import android.view.Surface;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.concurrent.ArrayBlockingQueue;
 
 public class CameraOperationManager {
 
     private CameraManager cameraManager;
     private CameraDevice mCameraDevice;
+    private CameraCharacteristics mCameraCharacteristics;
 
 
     private CameraDevice.StateCallback mCameraStateCallback = new CameraDevice.StateCallback() {
@@ -174,7 +180,6 @@ public class CameraOperationManager {
     private static final int MAX_CAMERA_OUTPUT_SURFACES = 3;
 
     public CameraOperationManager(Context context) {
-
         cameraManager = (CameraManager) context.getSystemService(Context.CAMERA_SERVICE);
         findBackCamera();
         surfaceList = new ArrayList<>();
@@ -204,6 +209,7 @@ public class CameraOperationManager {
             //check for back facing camera
             if (cameraCharacteristics.get(CameraCharacteristics.LENS_FACING) == CameraMetadata.LENS_FACING_BACK) {
                 backCameraID = cameraIDs[i];
+                mCameraCharacteristics = cameraCharacteristics;
                 cameraOrientation = cameraCharacteristics.get(CameraCharacteristics.SENSOR_ORIENTATION);
             }
         }
@@ -344,6 +350,21 @@ public class CameraOperationManager {
         } catch (CameraAccessException e) {
             e.printStackTrace();
         }
+    }
+
+    public boolean matchDisplayAndCameraResolution(int width, int height) {
+       StreamConfigurationMap scm =  mCameraCharacteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+        Size[] outputSizes = scm.getOutputSizes(ImageFormat.YUV_420_888);
+        System.out.println(Arrays.toString(outputSizes));
+        if(outputSizes != null){
+            for (int i = 0; i < outputSizes.length; i++) {
+                if((outputSizes[i].getHeight() == height && outputSizes[i].getWidth() == width)|| (outputSizes[i].getWidth() == height && outputSizes[i].getHeight() == width)){
+                     System.out.println("found size =>" +outputSizes.toString());
+                     return true;
+                }
+            }
+        }
+        return false;
     }
 }
 

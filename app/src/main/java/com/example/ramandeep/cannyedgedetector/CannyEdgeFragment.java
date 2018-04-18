@@ -140,8 +140,12 @@ public class CannyEdgeFragment extends Fragment implements View.OnTouchListener,
             System.out.println("surface is valid!");
         }
         Log.i(TAG,"width,height = "+surfaceFrame.width()+","+surfaceFrame.height());
-        if(opening){
-            cameraFrameProcInitTask.submitRunnable(new InitRunnable(surfaceFrame.width(),surfaceFrame.height(),surfaceHolder.getSurface()));
+        if(camOpManager.matchDisplayAndCameraResolution(surfaceFrame.width(),surfaceFrame.height())){
+            if(opening){
+                cameraFrameProcInitTask.submitRunnable(new InitRunnable(surfaceFrame.width(),surfaceFrame.height(),surfaceHolder.getSurface()));
+            }
+        }else{
+            throw new RuntimeException("Camera cannot output display size frames!");
         }
     }
 
