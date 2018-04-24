@@ -46,6 +46,8 @@ public class CameraFrameProcessor {
 
     private int x = -1;
     private int y = -1;
+    private int h_max = 20;
+    private int h_min = 4;
     private int camera_orientation = -1;
     private int display_orientation = -1;
 
@@ -266,6 +268,8 @@ public class CameraFrameProcessor {
             frameProc.set_camera_y_max(y);
             frameProc.set_camera_x_max(x);
         }
+        frameProc.set_h_max(h_max);
+        frameProc.set_h_min(h_min);
         frameProc.set_rgba_out(rgba_out);
         //rgba->rotated_rgba
         //rotated_rgba->send out to display
@@ -316,11 +320,15 @@ public class CameraFrameProcessor {
         ScriptGroup.Binding gradient_global_binding = new ScriptGroup.Binding(frameProc.getFieldID_gradient(),grad_mag);
         ScriptGroup.Closure non_max_suppressed_closure = canny_edge_detection_builder.addKernel(frameProc.getKernelID_non_max_suppression(),flat_type,grad_mag,grad_direction,gradient_global_binding);
         ScriptGroup.Future non_max_suppressed = non_max_suppressed_closure.getReturn();
-        //non_max_suppressed->threshold
-        ScriptGroup.Closure threshold_closure = canny_edge_detection_builder.addKernel(frameProc.getKernelID_canny_threshold(),flat_type,non_max_suppressed);
-        ScriptGroup.Future threshold = threshold_closure.getReturn();
+        //non_max_suppressed->hysteresis_thresholding in 2 parts
+        ScriptGroup.Closure hthresh_closure_1 = canny_edge_detection_builder.addKernel(frameProc.getKernelID_hthreshold_part1(),flat_type,non_max_suppressed);
+        ScriptGroup.Future hysteresis_threshold_1 = hthresh_closure_1.getReturn();
+        //
+        ScriptGroup.Binding hthresh_1_binding = new ScriptGroup.Binding(frameProc.getFieldID_hthresh1(),hysteresis_threshold_1);
+        ScriptGroup.Closure hthresh_closure_2 = canny_edge_detection_builder.addKernel(frameProc.getKernelID_hthreshold_part2(),flat_type,hysteresis_threshold_1,hthresh_1_binding);
+        ScriptGroup.Future hysteresis_threshold = hthresh_closure_2.getReturn();
         //unflatten
-        ScriptGroup.Closure flat_to_rgba_closure = canny_edge_detection_builder.addKernel(frameProc.getKernelID_flat_to_rgba(),rgba_input_type,threshold);
+        ScriptGroup.Closure flat_to_rgba_closure = canny_edge_detection_builder.addKernel(frameProc.getKernelID_flat_to_rgba(),rgba_input_type,hysteresis_threshold);
         ScriptGroup.Future flat_to_rgba = flat_to_rgba_closure.getReturn();
         //flip_rgba
         if(swapDimensions) {

@@ -9,8 +9,126 @@ int camera_x_max;
 int camera_y_max;
 
 uchar threshold = 8;
+
+int h_max = 30;
+int h_min = 4;
+
 rs_allocation gradient;
+rs_allocation hthresh1;
 rs_allocation rgba_out;
+
+uchar RS_KERNEL hthreshold_part1(const uchar in,uint32_t x,uint32_t y){
+    //if in is greater than h_max then it must be an edge
+    if(in >= h_max){
+        return 255;
+    }//if in is greater than h_min and less than h_max
+    else if(in > h_min){
+        //potential edge
+        return in;
+    }//if in is less then h_min then it is not an edge and can be set to 0
+    else{
+        return 0;
+    }
+}
+
+static uchar getLeft(uint32_t x,uint32_t y){
+    int leftx = x - 1;
+    if(leftx < 0){
+        return 0;
+    }else{
+        return *(uchar*)rsGetElementAt(hthresh1,x,y);
+    }
+}
+
+static uchar getRight(uint32_t x, uint32_t y){
+    if(x + 1 >= camera_x_max){
+        return 0;
+    }else{
+        return *(uchar*)rsGetElementAt(hthresh1,x+1,y);
+    }
+}
+
+static uchar getTop(uint32_t x,uint32_t y){
+    int topy = y - 1;
+    if(topy < 0){
+        return 0;
+    }else{
+        return *(uchar*)rsGetElementAt(hthresh1,x,y-1);
+    }
+}
+
+static uchar getBottom(uint32_t x, uint32_t y){
+    if(y + 1 >= camera_y_max){
+        return 0;
+    }
+    else{
+        return *(uchar*)rsGetElementAt(hthresh1,x,y+1);
+    }
+}
+
+static uchar getTopLeft(uint32_t x,uint32_t y){
+    int leftx = x - 1;
+    int topy = y - 1;
+    if(leftx > 0 && topy > 0){
+        return *(uchar*)rsGetElementAt(hthresh1,x - 1,y - 1);
+    }else{
+        return 0;
+    }
+}
+
+static uchar getTopRight(uint32_t x, uint32_t y){
+    if(x + 1 < camera_x_max && y + 1 < camera_y_max){
+        return *(uchar*)rsGetElementAt(hthresh1,x + 1,y + 1);
+    }else{
+        return 0;
+    }
+}
+
+static uchar getBottomLeft(uint32_t x,uint32_t y){
+    int leftx =  x - 1;
+    if(leftx > 0 && y + 1 < camera_y_max){
+        return *(uchar*)rsGetElementAt(hthresh1,x - 1,y + 1);
+    }else{
+        return 0;
+    }
+}
+
+static uchar getBottomRight(uint32_t x, uint32_t y){
+    if(x + 1 < camera_x_max && y + 1 < camera_y_max){
+        return *(uchar*)rsGetElementAt(hthresh1,x + 1,y + 1);
+    }else{
+        return 0;
+    }
+}
+
+uchar RS_KERNEL hthreshold_part2(const uchar in, uint32_t x,uint32_t y){
+    if(in == 255){
+        return 255;
+    }
+    else if(in > 0){
+        //then this is a potential edge
+        //if any of its neighbours are max threshold then i am max threshold
+        uchar left = getLeft(x,y);
+        uchar right = getRight(x,y);
+        uchar top = getTop(x,y);
+        uchar bottom = getBottom(x,y);
+        //if surrounded by any strong edges then this is also a strong edge pixel
+        if(left == 255 || right == 255 || top == 255 || bottom == 255){
+            return 255;
+        }
+
+        uchar top_left = getTopLeft(x,y);
+        uchar top_right = getTopRight(x,y);
+        uchar bottom_left = getBottomLeft(x,y);
+        uchar bottom_right = getBottomRight(x,y);
+
+        //if surrounded by any strong edges then this is also a strong edge pixel
+        if(top_left == 255 || top_right == 255 || bottom_left == 255 || bottom_right == 255){
+            return 255;
+        }
+    }
+    return 0;
+}
 
 uchar RS_KERNEL rgba_to_flat(const uchar4 in){
     return in.x;
@@ -37,8 +155,8 @@ void RS_KERNEL rotate_90_ccw(const uchar4 in, const uint32_t x,const uint32_t y)
 //gradient magnitude kernel
 
 uchar RS_KERNEL gradient_magnitude(uchar gx,uchar gy){
-    float4 x = rsUnpackColor8888((uchar){gx,0,0,255});
-    float4 y = rsUnpackColor8888((uchar){gy,0,0,255});
+    float4 x = rsUnpackColor8888((uchar4){gx,0,0,255});
+    float4 y = rsUnpackColor8888((uchar4){gy,0,0,255});
 
     float gx2= x.r*x.r;
     float gy2 = y.r*y.r;
