@@ -262,11 +262,11 @@ public class CameraFrameProcessor {
         frameProc.set_display_y_max(y);
         //display is rotated
         if(swapDimensions) {
-            frameProc.set_camera_y_max(x);
             frameProc.set_camera_x_max(y);
+            frameProc.set_camera_y_max(x);
         }else{
-            frameProc.set_camera_y_max(y);
             frameProc.set_camera_x_max(x);
+            frameProc.set_camera_y_max(y);
         }
         frameProc.set_h_max(h_max);
         frameProc.set_h_min(h_min);
@@ -277,10 +277,15 @@ public class CameraFrameProcessor {
         //yuv->rgba
         ScriptGroup.Closure yuv_to_rgba = camera_preview_builder.addKernel(intrinsicYuvToRGB_preview.getKernelID(), rgba_input_type);
         ScriptGroup.Future rgba = yuv_to_rgba.getReturn();
-        //flip_rgba
-        ScriptGroup.Closure rgba_to_flip_rgba = camera_preview_builder.addKernel(frameProc.getKernelID_rotate_90_ccw(), rgba_output_type,rgba);
-        ScriptGroup.Future flip_future = rgba_to_flip_rgba.getReturn();
-        camera_preview = camera_preview_builder.create("CameraPreviewProcess",flip_future);
+        if(swapDimensions){
+            //flip_rgba
+            ScriptGroup.Closure rgba_to_flip_rgba = camera_preview_builder.addKernel(frameProc.getKernelID_rotate_90_ccw(), rgba_output_type,rgba);
+            ScriptGroup.Future flip_future = rgba_to_flip_rgba.getReturn();
+            camera_preview = camera_preview_builder.create("CameraPreviewProcess",flip_future);
+        }else{
+            camera_preview = camera_preview_builder.create("CameraPreviewProcess",rgba);
+        }
+
         initCannyScripts();
     }
 

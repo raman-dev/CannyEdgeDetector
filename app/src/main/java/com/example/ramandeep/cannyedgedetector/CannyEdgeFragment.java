@@ -8,6 +8,7 @@ import android.app.Fragment;
 
 import android.content.pm.PackageManager;
 import android.graphics.Rect;
+import android.hardware.camera2.CameraMetadata;
 import android.os.Bundle;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
@@ -27,7 +28,7 @@ import static com.example.ramandeep.cannyedgedetector.CameraOperationManager.CAM
 public class CannyEdgeFragment extends Fragment implements View.OnTouchListener, SurfaceHolder.Callback {
 
 
-    public static final String TAG = "CannyFragment";
+    public static final String TAG = "MyApp";
     private GestureDetector gestureDetector;
     private GestureDetector.SimpleOnGestureListener simpleOnGestureListener;
 
@@ -35,10 +36,7 @@ public class CannyEdgeFragment extends Fragment implements View.OnTouchListener,
     private CameraOperationManager camOpManager;
     private CameraFrameProcessor cameraFrameProcessor;
     private BackgroundTask cameraFrameProcInitTask;
-
     private int displayOrientation;
-
-    private boolean opening = false;
 
     private static final float SWIPE_RANGE = 75f;
 
@@ -75,36 +73,32 @@ public class CannyEdgeFragment extends Fragment implements View.OnTouchListener,
     @Override
     public void onStart() {
         Log.i(TAG,"onStart!");
-        cameraFrameProcInitTask = new BackgroundTask("CameraFrameProcInitTask");
         camOpManager.onStart();
+        cameraFrameProcInitTask = new BackgroundTask("CameraFrameProcInitTask");
         super.onStart();
     }
 
     @Override
     public void onResume() {
         Log.i(TAG,"onResume!");
-        opening = true;
-        camOpManager.onResume(getActivity(),this);
         super.onResume();
+        camOpManager.onResume(getActivity(),this);
     }
 
     @Override
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         Log.i(TAG,"onRequestPermissionsResult!");
-        switch(requestCode){
-            case CAMERA_REQUEST_CODE:
-                if(grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED){
-                    camOpManager.onResume(getActivity(),this);
-                }else{
-                    throw new RuntimeException("Permission Not Granted!");
-                }
-                break;
+        if(requestCode == CameraOperationManager.CAMERA_REQUEST_CODE){
+            if(grantResults.length > 0 && grantResults[0] != PackageManager.PERMISSION_GRANTED){
+                getActivity().finish();
+            }
+        }else{
+            super.onRequestPermissionsResult(requestCode,permissions,grantResults);
         }
     }
 
     @Override
     public void onPause() {
-        opening = false;
         Log.i(TAG,"onPause!");
         camOpManager.onPause();
         super.onPause();
@@ -141,9 +135,7 @@ public class CannyEdgeFragment extends Fragment implements View.OnTouchListener,
         }
         Log.i(TAG,"width,height = "+surfaceFrame.width()+","+surfaceFrame.height());
         if(camOpManager.matchDisplayAndCameraResolution(surfaceFrame.width(),surfaceFrame.height())){
-            if(opening){
-                cameraFrameProcInitTask.submitRunnable(new InitRunnable(surfaceFrame.width(),surfaceFrame.height(),surfaceHolder.getSurface()));
-            }
+            cameraFrameProcInitTask.submitRunnable(new InitRunnable(surfaceFrame.width(),surfaceFrame.height(),surfaceHolder.getSurface()));
         }else{
             throw new RuntimeException("Camera cannot output display size frames!");
         }
@@ -204,6 +196,7 @@ public class CannyEdgeFragment extends Fragment implements View.OnTouchListener,
             cameraFrameProcessor.setDisplaySurface(surface);
             camOpManager.addOutputSurfaceBlocking(cameraFrameProcessor.getCameraOutputSurface());
             camOpManager.addOutputSurfaceBlocking(cameraFrameProcessor.getCameraCannyOutputSurface());
+            camOpManager.releaseInitWaitLock();
         }
     }
 }

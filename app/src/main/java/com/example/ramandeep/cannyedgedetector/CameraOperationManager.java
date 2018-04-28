@@ -25,6 +25,7 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import android.support.annotation.NonNull;
 import android.support.v4.app.ActivityCompat;
+import android.support.v4.content.ContextCompat;
 import android.util.Log;
 import android.util.Size;
 import android.view.Surface;
@@ -32,6 +33,9 @@ import android.view.Surface;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 
 public class CameraOperationManager {
 
@@ -45,23 +49,19 @@ public class CameraOperationManager {
         public void onOpened(@NonNull CameraDevice cameraDevice) {
             Log.i(TAG, "CameraOpened!");
             mCameraDevice = cameraDevice;
-            //create capture session but wait until a valid surface is available
-            try {
-                surfaceList.add(blockingQueue.take());
-                Log.i(TAG, "list size =" + surfaceList.size());
-            } catch (InterruptedException e) {
-                e.printStackTrace();
-            }
 
             try {
-                surfaceList.add(blockingQueue.take());
-                Log.i(TAG, "list size =" + surfaceList.size());
+                initWaitLock.await();
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }
 
             while (blockingQueue.size() > 0) {
-                surfaceList.add(blockingQueue.poll());
+                try {
+                    surfaceList.add(blockingQueue.take());
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
             }
 
             if (mCameraDevice != null) {
@@ -87,11 +87,14 @@ public class CameraOperationManager {
         public void onDisconnected(@NonNull CameraDevice cameraDevice) {
             cameraDevice.close();
             mCameraDevice = null;
+            Log.i(TAG,"CameraDisconnected!");
         }
 
         @Override
         public void onError(@NonNull CameraDevice cameraDevice, int i) {
             cameraDevice.close();
+            mCameraDevice = null;
+            Log.i(TAG,"CameraError!");
         }
     };
     private CameraCaptureSession mCameraCaptureSession = null;
@@ -133,6 +136,7 @@ public class CameraOperationManager {
 
     private int cameraOrientation;
     private String backCameraID;
+    private CountDownLatch initWaitLock;
 
 
     private void startCameraPreview() {
@@ -146,17 +150,6 @@ public class CameraOperationManager {
         previewRequestBuilder.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON);
         previewRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
 
-
-        try {
-            singleImageRequestBuilder = mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
-        } catch (CameraAccessException e) {
-            e.printStackTrace();
-        }
-
-        singleImageRequestBuilder.addTarget(surfaceList.get(1));
-        singleImageRequestBuilder.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON);
-        singleImageRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_AUTO);
-
         try {
             mCameraCaptureSession.setRepeatingRequest(previewRequestBuilder.build(), mCaptureCallback, cameraThreadHandler);
         } catch (CameraAccessException e) {
@@ -169,7 +162,7 @@ public class CameraOperationManager {
 
     private ArrayList<Surface> surfaceList;
 
-    private static final String TAG = "CamOpManager";
+    private static final String TAG = "MyApp";
 
     private Handler cameraThreadHandler;
     private HandlerThread cameraThread;
@@ -182,8 +175,6 @@ public class CameraOperationManager {
     public CameraOperationManager(Context context) {
         cameraManager = (CameraManager) context.getSystemService(Context.CAMERA_SERVICE);
         findBackCamera();
-        surfaceList = new ArrayList<>();
-        blockingQueue = new ArrayBlockingQueue<>(MAX_CAMERA_OUTPUT_SURFACES);
     }
 
     /**
@@ -219,7 +210,7 @@ public class CameraOperationManager {
      * Use this method to add the first surface so the capture session
      * waits to configure until the surface is ready
      *
-     * @param surface
+     * @param surface A surface to add to the blocking queue to eventually be appended to the camera output surface list
      */
     public void addOutputSurfaceBlocking(Surface surface) {
         if (!blockingQueue.contains(surface)) {
@@ -241,6 +232,18 @@ public class CameraOperationManager {
                 e.printStackTrace();
             }
 
+            if(singleImageRequestBuilder == null) {
+                try {
+                    singleImageRequestBuilder = mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
+                } catch (CameraAccessException e) {
+                    e.printStackTrace();
+                }
+
+                singleImageRequestBuilder.addTarget(surfaceList.get(1));
+                singleImageRequestBuilder.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON);
+                singleImageRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_AUTO);
+            }
+
             try {
                 mCameraCaptureSession.capture(singleImageRequestBuilder.build(), mCaptureCallback, cameraThreadHandler);
             } catch (CameraAccessException e) {
@@ -251,6 +254,9 @@ public class CameraOperationManager {
 
     public void onStart() {
         startCameraThread();
+        initWaitLock = new CountDownLatch(1);
+        surfaceList = new ArrayList<>();
+        blockingQueue = new ArrayBlockingQueue<>(MAX_CAMERA_OUTPUT_SURFACES);
     }
 
     public void onResume(Activity activity, Fragment fragment) {
@@ -270,17 +276,16 @@ public class CameraOperationManager {
      * Open camera with camera manager
      */
     private void openCamera(Activity activity, Fragment fragment) {
-
-        if (ActivityCompat.checkSelfPermission(activity, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+        Log.i(TAG,"Trying to open camera...");
+        if (ContextCompat.checkSelfPermission(activity, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             fragment.requestPermissions(new String[]{Manifest.permission.CAMERA}, CAMERA_REQUEST_CODE);
-            return;
+        }else {
+            try {
+                cameraManager.openCamera(backCameraID, mCameraStateCallback, cameraThreadHandler);
+            } catch (CameraAccessException e) {
+                e.printStackTrace();
+            }
         }
-        try {
-            cameraManager.openCamera(backCameraID, mCameraStateCallback, cameraThreadHandler);
-        } catch (CameraAccessException e) {
-            e.printStackTrace();
-        }
-
     }
 
     /**
@@ -327,6 +332,7 @@ public class CameraOperationManager {
         }
         if (cameraThread != null) {
             cameraThread.quitSafely();
+            Log.i(TAG,"CameraOperationThread Closed!");
             cameraThread = null;
         }
     }
@@ -365,6 +371,10 @@ public class CameraOperationManager {
             }
         }
         return false;
+    }
+
+    public void releaseInitWaitLock() {
+        initWaitLock.countDown();
     }
 }
 
