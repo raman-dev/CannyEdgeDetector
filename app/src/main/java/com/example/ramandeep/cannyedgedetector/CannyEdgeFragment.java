@@ -29,11 +29,9 @@ public class CannyEdgeFragment extends Fragment implements View.OnTouchListener,
     private GestureDetector gestureDetector;
     private GestureDetector.SimpleOnGestureListener simpleOnGestureListener;
 
-    private SurfaceView displaySurfaceView;
     private CameraOperationManager cameraOperationManager;
     private CameraFrameProcessor cameraFrameProcessor;
-    private BackgroundTask cameraFrameProcInitTask;
-    private int displayOrientation;
+    private BackgroundTask cameraFrameProcessInitTask;
 
     private static final float SWIPE_RANGE = 75f;
 
@@ -52,7 +50,7 @@ public class CannyEdgeFragment extends Fragment implements View.OnTouchListener,
     public View onCreateView(LayoutInflater inflater, @Nullable ViewGroup container, Bundle savedInstanceState) {
         View view = inflater.inflate(R.layout.canny_frag,container,false);
 
-        displaySurfaceView = view.findViewById(R.id.displaySurfaceView);
+        SurfaceView displaySurfaceView = view.findViewById(R.id.displaySurfaceView);
         displaySurfaceView.getHolder().addCallback(this);
         view.setOnTouchListener(this);
 
@@ -62,7 +60,7 @@ public class CannyEdgeFragment extends Fragment implements View.OnTouchListener,
     @Override
     public void onViewCreated(View view, @Nullable Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
-        displayOrientation = getActivity().getWindowManager().getDefaultDisplay().getRotation();
+        int displayOrientation = getActivity().getWindowManager().getDefaultDisplay().getRotation();
         cameraFrameProcessor.setCameraOrientation(cameraOperationManager.getCameraOrientation());
         cameraFrameProcessor.setDisplayOrientation(displayOrientation);
     }
@@ -71,7 +69,7 @@ public class CannyEdgeFragment extends Fragment implements View.OnTouchListener,
     public void onStart() {
         Log.i(TAG,"onStart!");
         cameraOperationManager.onStart();
-        cameraFrameProcInitTask = new BackgroundTask("CameraFrameProcInitTask");
+        cameraFrameProcessInitTask = new BackgroundTask("CameraFrameProcInitTask");
         super.onStart();
     }
 
@@ -105,7 +103,7 @@ public class CannyEdgeFragment extends Fragment implements View.OnTouchListener,
     public void onStop() {
         Log.i(TAG,"onStop!");
         cameraOperationManager.onStop();
-        cameraFrameProcInitTask.CloseTask();
+        cameraFrameProcessInitTask.CloseTask();
         cameraFrameProcessor.CloseBackgroundThreads();
         cameraFrameProcessor.DestroyRenderScript();
         super.onStop();
@@ -132,7 +130,7 @@ public class CannyEdgeFragment extends Fragment implements View.OnTouchListener,
         }
         Log.i(TAG,"width,height = "+surfaceFrame.width()+","+surfaceFrame.height());
         if(cameraOperationManager.matchDisplayAndCameraResolution(surfaceFrame.width(),surfaceFrame.height())){
-            cameraFrameProcInitTask.submitRunnable(new InitRunnable(surfaceFrame.width(),surfaceFrame.height(),surfaceHolder.getSurface()));
+            cameraFrameProcessInitTask.submitRunnable(new InitRunnable(surfaceFrame.width(),surfaceFrame.height(),surfaceHolder.getSurface()));
         }else{
             throw new RuntimeException("Camera cannot output display size frames!");
         }
@@ -191,6 +189,7 @@ public class CannyEdgeFragment extends Fragment implements View.OnTouchListener,
             cameraFrameProcessor.setDimensions(width,height);
             cameraFrameProcessor.init(getContext());
             cameraFrameProcessor.setDisplaySurface(surface);
+
             cameraOperationManager.addOutputSurfaceBlocking(cameraFrameProcessor.getCameraOutputSurface());
             cameraOperationManager.addOutputSurfaceBlocking(cameraFrameProcessor.getCameraCannyOutputSurface());
             cameraOperationManager.releaseInitWaitLock();
