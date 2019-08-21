@@ -110,12 +110,6 @@ public class CannyEdgeFragment extends Fragment implements View.OnTouchListener,
     }
 
     @Override
-    public void onDestroyView() {
-        Log.i(TAG,"onDestroyView!");
-        super.onDestroyView();
-    }
-
-    @Override
     public boolean onTouch(View view, MotionEvent motionEvent) {
         gestureDetector.onTouchEvent(motionEvent);
         return true;
@@ -124,13 +118,11 @@ public class CannyEdgeFragment extends Fragment implements View.OnTouchListener,
     @Override
     public void surfaceCreated(SurfaceHolder surfaceHolder) {
         Log.i(TAG,"surfaceCreated!");
-        Rect surfaceFrame= surfaceHolder.getSurfaceFrame();
-        if(surfaceHolder.getSurface().isValid()){
-            System.out.println("surface is valid!");
-        }
-        Log.i(TAG,"width,height = "+surfaceFrame.width()+","+surfaceFrame.height());
-        if(cameraOperationManager.matchDisplayAndCameraResolution(surfaceFrame.width(),surfaceFrame.height())){
-            cameraFrameProcessInitTask.submitRunnable(new InitRunnable(surfaceFrame.width(),surfaceFrame.height(),surfaceHolder.getSurface()));
+        Rect frame = surfaceHolder.getSurfaceFrame();
+        int width = frame.width();
+        int height = frame.height();
+        if(cameraOperationManager.matchDisplayAndCameraResolution(width,height)){
+            cameraFrameProcessInitTask.submitRunnable(new InitRunnable(width,height,surfaceHolder.getSurface()));
         }else{
             throw new RuntimeException("Camera cannot output display size frames!");
         }
@@ -139,6 +131,7 @@ public class CannyEdgeFragment extends Fragment implements View.OnTouchListener,
     @Override
     public void surfaceChanged(SurfaceHolder surfaceHolder, int format, int width, int height) {
         Log.i(TAG,"surfaceChanged!");
+
 
     }
 
@@ -188,7 +181,7 @@ public class CannyEdgeFragment extends Fragment implements View.OnTouchListener,
         public void run() {
             cameraFrameProcessor.setDimensions(width,height);
             cameraFrameProcessor.init(getContext());
-            cameraFrameProcessor.setDisplaySurface(surface);
+            cameraFrameProcessor.setOutputSurface(surface);
 
             cameraOperationManager.addOutputSurfaceBlocking(cameraFrameProcessor.getCameraOutputSurface());
             cameraOperationManager.addOutputSurfaceBlocking(cameraFrameProcessor.getCameraCannyOutputSurface());

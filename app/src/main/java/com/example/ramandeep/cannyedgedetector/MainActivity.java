@@ -14,18 +14,6 @@ public class MainActivity extends AppCompatActivity {
         Log.i(TAG,"onCreate!");
         setContentView(R.layout.activity_main);
         getFragmentManager().beginTransaction().add(R.id.fragment_container,new CannyEdgeFragment()).commit();
-
-    }
-
-    @Override
-    protected void onRestart() {
-        super.onRestart();
-    }
-
-    @Override
-    protected void onStart() {
-        super.onStart();
-
     }
 
     private void hideStatusBar() {
@@ -43,21 +31,5 @@ public class MainActivity extends AppCompatActivity {
     protected void onResume() {
         hideStatusBar();
         super.onResume();
-    }
-
-    @Override
-    protected void onPause(){
-        super.onPause();
-    }
-
-    @Override
-    protected void onStop() {
-        super.onStop();
-    }
-
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        Log.i(TAG,"onDestroy!");
     }
 }

@@ -10,7 +10,6 @@ import android.app.Fragment;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.graphics.ImageFormat;
-import android.graphics.PixelFormat;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
@@ -23,8 +22,7 @@ import android.hardware.camera2.TotalCaptureResult;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.os.Handler;
 import android.os.HandlerThread;
-import android.support.annotation.NonNull;
-import android.support.v4.app.ActivityCompat;
+import androidx.annotation.NonNull;
 import android.support.v4.content.ContextCompat;
 import android.util.Log;
 import android.util.Size;
@@ -35,7 +33,6 @@ import java.util.Arrays;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Semaphore;
-import java.util.concurrent.TimeUnit;
 
 public class CameraOperationManager {
 
@@ -66,7 +63,7 @@ public class CameraOperationManager {
 
             if (mCameraDevice != null) {
                 try {
-                    mCameraDevice.createCaptureSession(surfaceList, mCaptureSessionCallback, cameraThreadHandler);
+                    mCameraDevice.createCaptureSession(surfaceList, mCameraCaptureSessionStateCallback, cameraThreadHandler);
                 } catch (CameraAccessException e) {
                     e.printStackTrace();
                 }
@@ -98,7 +95,7 @@ public class CameraOperationManager {
         }
     };
     private CameraCaptureSession mCameraCaptureSession = null;
-    private CameraCaptureSession.StateCallback mCaptureSessionCallback = new CameraCaptureSession.StateCallback() {
+    private CameraCaptureSession.StateCallback mCameraCaptureSessionStateCallback = new CameraCaptureSession.StateCallback() {
         @Override
         public void onConfigured(@NonNull CameraCaptureSession cameraCaptureSession) {
             mCameraCaptureSession = cameraCaptureSession;
@@ -157,6 +154,9 @@ public class CameraOperationManager {
         }
     }
 
+    /*
+    * Request builders for image capture and camera preview
+    * */
     private CaptureRequest.Builder previewRequestBuilder = null;
     private CaptureRequest.Builder singleImageRequestBuilder = null;
 
@@ -214,6 +214,7 @@ public class CameraOperationManager {
      */
     public void addOutputSurfaceBlocking(Surface surface) {
         if (!blockingQueue.contains(surface)) {
+            Log.i(TAG,"Added surface!");
             blockingQueue.add(surface);
         }
     }
@@ -239,7 +240,11 @@ public class CameraOperationManager {
                     e.printStackTrace();
                 }
 
-                singleImageRequestBuilder.addTarget(surfaceList.get(1));
+                if(surfaceList.size() > 1) {
+                    singleImageRequestBuilder.addTarget(surfaceList.get(1));
+                }else{
+                    singleImageRequestBuilder.addTarget(surfaceList.get(0));
+                }
                 singleImageRequestBuilder.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON);
                 singleImageRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_AUTO);
             }

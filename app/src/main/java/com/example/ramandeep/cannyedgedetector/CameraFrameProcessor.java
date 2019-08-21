@@ -112,7 +112,11 @@ public class CameraFrameProcessor {
         this.display_orientation = display_orientation;
     }
 
-    public void setDisplaySurface(Surface surface){
+    /*
+    * Set the display surface for rgba_out Allocation that will contain final
+    * image data to show user
+    * */
+    public void setOutputSurface(Surface surface){
         rgba_out.setSurface(surface);
     }
 
@@ -125,8 +129,9 @@ public class CameraFrameProcessor {
     }
 
     /**
-     * Return the surface for the camera to output data
-     * @return The surface for canny input data
+     * Return the surface for the camera to output data to be processed
+     * by renderscript kernels
+     * @return The surface for canny edge detection input data
      */
     public Surface getCameraCannyOutputSurface() {
         return camera_canny_input.getSurface();
