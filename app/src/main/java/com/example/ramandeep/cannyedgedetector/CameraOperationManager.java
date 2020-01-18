@@ -41,7 +41,7 @@ public class CameraOperationManager {
     private CameraCharacteristics mCameraCharacteristics;
 
 
-    private CameraDevice.StateCallback mCameraStateCallback = new CameraDevice.StateCallback() {
+    private CameraDevice.StateCallback mCameraStateCallback = new CameraDevice.StateCallback(){
         @Override
         public void onOpened(@NonNull CameraDevice cameraDevice) {
             Log.i(TAG, "CameraOpened!");
@@ -278,6 +278,15 @@ public class CameraOperationManager {
     }
 
     /**
+     * Initialize and start the camera thread.
+     */
+    private void startCameraThread() {
+        cameraThread = new HandlerThread("CameraOperationThread");
+        cameraThread.start();
+        cameraThreadHandler = new Handler(cameraThread.getLooper());
+    }
+
+    /**
      * Open camera with camera manager
      */
     private void openCamera(Activity activity, Fragment fragment) {
@@ -294,6 +303,18 @@ public class CameraOperationManager {
     }
 
     /**
+     * Stop the camera preview by removing the repeating request
+     */
+    private void stopPreview() {
+        try {
+            mCameraCaptureSession.stopRepeating();
+        } catch (CameraAccessException e) {
+            e.printStackTrace();
+        }
+    }
+
+
+    /**
      * Close the camera and end the camera capture session
      */
     private void closeCamera() {
@@ -305,26 +326,6 @@ public class CameraOperationManager {
         if (mCameraDevice != null) {
             mCameraDevice.close();
         }
-    }
-
-    /**
-     * Stop the camera preview by removing the repeating request
-     */
-    private void stopPreview() {
-        try {
-            mCameraCaptureSession.stopRepeating();
-        } catch (CameraAccessException e) {
-            e.printStackTrace();
-        }
-    }
-
-    /**
-     * Initialize and start the camera thread.
-     */
-    private void startCameraThread() {
-        cameraThread = new HandlerThread("CameraOperationThread");
-        cameraThread.start();
-        cameraThreadHandler = new Handler(cameraThread.getLooper());
     }
 
     /**
